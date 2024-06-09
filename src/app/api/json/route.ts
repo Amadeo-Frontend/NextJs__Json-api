@@ -1,5 +1,7 @@
+import { openai } from "@/app/lib/openai";
 import { NextRequest, NextResponse } from "next/server";
 import { ZodTypeAny, number, z } from "zod";
+import { EXAMPLE_ANSWER, EXAMPLE_PROMPT } from "./exemple";
 
 const determineSchemaType = (schema: any) => {
   if (!schema.hasOwnProperty("type")) {
@@ -9,7 +11,7 @@ const determineSchemaType = (schema: any) => {
       return typeof schema;
     }
   }
-  return schema.type
+  return schema.type;
 };
 
 const jsonSchemaToZod = (schema: any): ZodTypeAny => {
@@ -52,6 +54,12 @@ export const POST = async (req: NextRequest) => {
 
   const dynamicSchema = jsonSchemaToZod(format);
 
+  const content = `DATA: \n"${data}"\n\n-----------\nExpected JSON format: ${JSON.stringify(
+    format,
+    null,
+    2
+  )}\n\n-----------\nValid JSON output in expected format:`
+
   // step 3: retry mechanism
   type PromiseExecutor<T> = (
     resolve: (value: T) => void,
@@ -71,18 +79,40 @@ export const POST = async (req: NextRequest) => {
     }
   }
 
-  const validationResult = RetryablePromise.retry<object>(
+  const validationResult = await RetryablePromise.retry<object>(
     5,
-    (resolve, reject) => {
+    async (resolve, reject) => {
       try {
         //call AI
-        const res = "{name: 'John'}";
+        const res = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "assistant",
+              content:
+                "You are an AI that converts data into the attached JSON format. You respond with nothing but valid JSON based on the input data. Your output should DIRECTLY be valid JSON, nothing added before and after. You will begin with the opening curly brace and end with the closing curly brace. Only if you absolutely cannot determine a field, use the value null.",
+            },
+            {
+                role:"user",
+                content: EXAMPLE_PROMPT
+            },
+            {role:"user", content: EXAMPLE_ANSWER},
+            {
+                role: "user",
+                content,
+              },
+          ],
+        });
         // validate json
-        const validationResult = dynamicSchema.parse(JSON.parse(res));
+        
+        const text = res.choices[0].message.content
+
+        const validationResult = dynamicSchema.parse(JSON.parse(text || ""))
         return resolve(validationResult);
       } catch (err) {
         reject(err);
       }
+      z;
     }
   );
 
